@@ -1,31 +1,28 @@
 fx_version 'cerulean'
 game 'gta5'
 
-author 'TuNombre'
-description 'NextGen Inventory con React y Zustand'
+author 'Caserio'
+description 'NextGen Inventory con React + Vite'
 version '1.0.0'
 
--- Versión de QBCore
 shared_script '@qb-core/import.lua'
 
--- Scripts de Cliente y Servidor
-client_scripts {
-    'client/main.lua'
-}
+-- Scripts Lógicos
+client_script 'client/main.lua'
+server_script 'server/main.lua'
 
-server_scripts {
-    'server/main.lua'
-}
-
--- Interfaz de Usuario (React Build)
-ui_page 'web/build/index.html'
+-- Interfaz de Usuario
+-- IMPORTANTE: Vite crea la carpeta 'dist', no 'build'
+ui_page 'web/dist/index.html'
 
 files {
-    'web/build/index.html',
-    'web/build/assets/*.js',
-    'web/build/assets/*.css',
-    'web/build/images/*.png', -- Si pones imágenes locales aquí
+    'web/dist/index.html',
+    'web/dist/assets/*.js',
+    'web/dist/assets/*.css',
+    'web/dist/*.png',
+    'web/dist/*.svg',
+    -- Si tienes imagenes en public/img/icons, Vite las copiará a dist/img/icons
+    'web/dist/img/icons/*.png' 
 }
 
--- Habilitar NUI en el juego
 lua54 'yes'

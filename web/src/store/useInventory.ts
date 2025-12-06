@@ -1,114 +1,115 @@
 import { create } from 'zustand';
-// FIX 1: Usar 'import type' para cumplir con verbatimModuleSyntax
-import type { InventoryState } from '../types/inventory';
-// Asegúrate de que la ruta sea correcta. Si configuraste el alias en Fase 1.6, puedes usar '@/utils/fetchNui'
+import type { InventoryState, Item } from '../types/inventory';
 import { fetchNui } from '../utils/fetchNui';
 
+// Helper para convertir el formato de QBCore (Objeto) a Array para React
+const formatItems = (itemsObj: any): Item[] => {
+    if (!itemsObj) return [];
+    if (Array.isArray(itemsObj)) return itemsObj; // Ya es array (formato nuevo)
+
+    // Si es objeto {1: {name:x}, 2: {name:y}}, lo convertimos a array preservando slots
+    return Object.values(itemsObj).map((item: any) => ({
+        ...item,
+        // Aseguramos que count exista (a veces viene como amount)
+        count: item.amount || item.count || 1,
+        // Aseguramos etiqueta
+        label: item.label || item.name
+    }));
+};
+
 export const useInventory = create<InventoryState>((set, get) => ({
-    isOpen: true,
-    playerItems: [
-        { name: 'sandwich', label: 'Sándwich', count: 1, slot: 1, },
-        { name: 'water', label: 'Agua', count: 5, slot: 2, },
-        { name: 'phone', label: 'Teléfono', count: 1, slot: 3, },
-        { name: 'weed-2kg', label: 'Weed', count: 1, slot: 4, },
-    ],
+    isOpen: false,
+    playerItems: [],
     secondaryItems: [],
-    maxWeight: 120000,
+    maxWeight: 0,
     currentWeight: 0,
 
-    setInventoryData: (data) => set({
-        isOpen: true,
-        playerItems: data.playerItems,
-        secondaryItems: data.secondaryItems,
-        currentWeight: data.weight
-    }),
+    setInventoryData: (data) => {
+        console.log('[React] Recibiendo datos de Lua:', data);
+
+        // Detectar si viene del formato standard qb-inventory o del nuestro
+        // qb-inventory usa 'inventory' y 'other', nosotros usamos 'playerItems'
+        const playerItems = data.playerItems || formatItems(data.inventory);
+        const secondaryItems = data.secondaryItems || formatItems(data.other);
+
+        set({
+            isOpen: true,
+            playerItems: playerItems,
+            secondaryItems: secondaryItems,
+            currentWeight: data.weight || 0,
+            maxWeight: data.maxWeight || 120000
+        });
+    },
 
     closeInventory: () => {
-        // FIX: Pasar objeto vacío como mock para evitar error en navegador
         fetchNui('close', {}, {});
+        set({ isOpen: false });
+    },
+
+    hideInventory: () => {
         set({ isOpen: false });
     },
 
     moveItem: (fromInv, fromSlot, toInv, toSlot) => {
         const state = get();
-
-        // 1. Guardar Snapshot para Rollback (por si falla el server)
+        // 1. Snapshot para Rollback
         const previousPlayerItems = [...state.playerItems];
         const previousSecondaryItems = [...state.secondaryItems];
 
-        // Helpers para seleccionar el array correcto (clonados para no mutar estado directamente)
+        // Helpers
         const getItems = (inv: 'player' | 'secondary') =>
             inv === 'player' ? [...state.playerItems] : [...state.secondaryItems];
 
         const sourceItems = getItems(fromInv);
         const targetItems = fromInv === toInv ? sourceItems : getItems(toInv);
 
-        // Encontrar índices de los items involucrados
+        // Indices
         const sourceItemIndex = sourceItems.findIndex(i => i.slot === fromSlot);
         const targetItemIndex = targetItems.findIndex(i => i.slot === toSlot);
 
-        if (sourceItemIndex === -1) return; // Seguridad: no existe item origen
+        if (sourceItemIndex === -1) return;
 
         const sourceItem = { ...sourceItems[sourceItemIndex] };
         const targetItem = targetItemIndex !== -1 ? { ...targetItems[targetItemIndex] } : undefined;
 
-        // --- LÓGICA DE ACTUALIZACIÓN VISUAL (Optimista) ---
-
-        // Actualizar el slot del item que movemos
+        // --- LÓGICA OPTIMISTA ---
         sourceItem.slot = toSlot;
 
         if (targetItem) {
-            // CASO: SWAP (Intercambio)
-            // Si ya hay un item, le asignamos el slot del origen para intercambiar
             targetItem.slot = fromSlot;
+            sourceItems[sourceItemIndex] = targetItem;
 
             if (fromInv === toInv) {
-                // Si es la misma grilla, intercambiamos en el mismo array
-                sourceItems[sourceItemIndex] = targetItem;
                 sourceItems[targetItemIndex] = sourceItem;
             } else {
-                // Grillas diferentes: Cruzamos los items
-                sourceItems[sourceItemIndex] = targetItem; // El del destino viene al origen
-                targetItems[targetItemIndex] = sourceItem; // El del origen va al destino
+                targetItems[targetItemIndex] = sourceItem;
             }
         } else {
-            // CASO: MOVER A VACÍO
             if (fromInv === toInv) {
-                // Simplemente actualizamos el objeto en el array (el slot ya cambió arriba)
                 sourceItems[sourceItemIndex] = sourceItem;
             } else {
-                // Mover entre inventarios: sacar de uno y meter en otro
                 sourceItems.splice(sourceItemIndex, 1);
                 targetItems.push(sourceItem);
             }
         }
 
-        // Aplicar cambios visuales inmediatos
         set({
             playerItems: fromInv === 'player' ? sourceItems : (toInv === 'player' ? targetItems : state.playerItems),
             secondaryItems: fromInv === 'secondary' ? sourceItems : (toInv === 'secondary' ? targetItems : state.secondaryItems)
         });
 
-        // 2. Enviar petición al Servidor
-        // FIX 2: Tipar la respuesta esperada y AGREGAR MOCK DATA (3er argumento) para evitar CORS en dev
+        // NOTA IMPORTANTE:
+        // Si usas el backend original de QB, es posible que el evento no se llame 'moveItem'.
+        // Podría llamarse 'CombineItem', 'SwitchItem' o necesitar que agregues el evento
+        // 'moveItem' en el lua original (client/main.lua).
+        // Por ahora mantenemos 'moveItem' asumiendo que agregarás ese pequeño evento al Lua oficial.
         fetchNui<{ success: boolean }>('moveItem', {
-            fromInv, fromSlot, toInv, toSlot
-        }, { success: true }).then(resp => {
-            // Si el servidor responde con error, revertimos todo (Rollback)
-            if (resp && resp.success === false) {
-                console.error("Rollback: Server rechazó el movimiento");
-                set({
-                    playerItems: previousPlayerItems,
-                    secondaryItems: previousSecondaryItems
-                });
-            }
-        }).catch(() => {
-            // Error de red o crash de NUI
-            console.error("Error de comunicación NUI");
-            set({
-                playerItems: previousPlayerItems,
-                secondaryItems: previousSecondaryItems
-            });
+            fromInv, fromSlot, toInv, toSlot,
+            // Datos extra que a veces pide QB original
+            fromAmount: sourceItem.count,
+        }, { success: true }).catch(() => {
+            console.error("Rollback: Error de comunicación");
+            set({ playerItems: previousPlayerItems, secondaryItems: previousSecondaryItems });
         });
     }
 }));
