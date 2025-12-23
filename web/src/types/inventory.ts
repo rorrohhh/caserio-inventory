@@ -4,7 +4,7 @@ export interface Item {
     count: number;
     slot: number;
     image?: string;
-    weight?: number; // <--- AGREGADO: Esto soluciona el error en App.tsx
+    weight?: number;
     metadata?: {
         durability?: number;
         serial?: string;
@@ -21,6 +21,18 @@ export interface InventoryState {
     secondaryItems: Item[];
     maxWeight: number;
     currentWeight: number;
+
+    hasSecondary: boolean;
+    secondaryLabel: string;
+
+    // --- NUEVA PROPIEDAD AGREGADA ---
+    secondaryId: string | null;
+    // --------------------------------
+
+    activeItem: Item | null;
+    deleteItemLocal: (inventory: 'player' | 'secondary', slot: number, amount: number) => void;
+    setActiveItem: (item: Item | null) => void;
+
 
     // Actions
     setInventoryData: (data: any) => void;

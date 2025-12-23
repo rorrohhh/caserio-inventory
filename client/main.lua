@@ -217,122 +217,6 @@ RegisterNetEvent('qb-inventory:client:giveAnim', function()
     TaskPlayAnim(PlayerPedId(), 'mp_common', 'givetake1_b', 8.0, 1.0, -1, 16, 0, false, false, false)
 end)
 
--- NUI Callbacks
-
-RegisterNUICallback('PlayDropFail', function(_, cb)
-    PlaySound(-1, 'Place_Prop_Fail', 'DLC_Dmod_Prop_Editor_Sounds', 0, 0, 1)
-    cb({})
-end)
-
-RegisterNUICallback('AttemptPurchase', function(data, cb)
-    QBCore.Functions.TriggerCallback('qb-inventory:server:attemptPurchase', function(canPurchase)
-        cb(canPurchase)
-    end, data)
-end)
-
--- Cambiado a 'close' para coincidir con React y corregido el retorno JSON
-RegisterNUICallback('close', function(data, cb)
-    SetNuiFocus(false, false)
-    
-    if data and data.name then
-        -- Caso 1: Cerramos un inventario específico (maletero, guantera, etc)
-        if data.name:find('trunk-') then
-            CloseTrunk()
-        end
-        TriggerServerEvent('qb-inventory:server:closeInventory', data.name)
-    elseif CurrentDrop then
-        -- Caso 2: Cerramos un drop del suelo
-        TriggerServerEvent('qb-inventory:server:closeInventory', CurrentDrop)
-        CurrentDrop = nil
-    else
-        -- Caso 3 (EL ARREGLO): Si no hay datos (cerrar con ESC), asumimos que es el inventario del jugador
-        -- Esto libera el estado 'inv_busy' en el servidor
-        TriggerServerEvent('qb-inventory:server:closeInventory', 'player')
-    end
-    
-    cb({}) -- Respuesta vacía válida en JSON
-end)
-
--- Alias por si algún otro script lo llama con el nombre antiguo
-RegisterNUICallback('CloseInventory', function(data, cb)
-    SetNuiFocus(false, false)
-    cb({})
-end)
-
--- Cambiado a 'useItem' para coincidir con React
-RegisterNUICallback('useItem', function(data, cb)
-    TriggerServerEvent('qb-inventory:server:useItem', data.item)
-    cb({})
-end)
-
--- Alias para UseItem
-RegisterNUICallback('UseItem', function(data, cb)
-    TriggerServerEvent('qb-inventory:server:useItem', data.item)
-    cb({})
-end)
-
-RegisterNUICallback('SetInventoryData', function(data, cb)
-    TriggerServerEvent('qb-inventory:server:SetInventoryData', data.fromInventory, data.toInventory, data.fromSlot, data.toSlot, data.fromAmount, data.toAmount)
-    cb({})
-end)
-
--- Corregido nombre a minúscula 'giveItem'
-RegisterNUICallback('giveItem', function(data, cb)
-    local player, distance = QBCore.Functions.GetClosestPlayer(GetEntityCoords(PlayerPedId()))
-    if player ~= -1 and distance < 3 then
-        local playerId = GetPlayerServerId(player)
-        QBCore.Functions.TriggerCallback('qb-inventory:server:giveItem', function(success)
-            cb(success)
-        end, playerId, data.item.name, data.amount, data.slot, data.info)
-    else
-        QBCore.Functions.Notify(Lang:t('notify.nonb'), 'error')
-        cb(false)
-    end
-end)
-
-RegisterNUICallback('GetWeaponData', function(cData, cb)
-    local data = {
-        WeaponData = QBCore.Shared.Items[cData.weapon],
-        AttachmentData = FormatWeaponAttachments(cData.ItemData)
-    }
-    cb(data)
-end)
-
-RegisterNUICallback('RemoveAttachment', function(data, cb)
-    local ped = PlayerPedId()
-    local WeaponData = data.WeaponData
-    local allAttachments = exports['qb-weapons']:getConfigWeaponAttachments()
-    local Attachment = allAttachments[data.AttachmentData.attachment][WeaponData.name]
-    local itemInfo = QBCore.Shared.Items[data.AttachmentData.attachment]
-    QBCore.Functions.TriggerCallback('qb-weapons:server:RemoveAttachment', function(NewAttachments)
-        if NewAttachments ~= false then
-            local Attachies = {}
-            RemoveWeaponComponentFromPed(ped, joaat(WeaponData.name), joaat(Attachment))
-            for _, v in pairs(NewAttachments) do
-                for attachmentType, weapons in pairs(allAttachments) do
-                    local componentHash = weapons[WeaponData.name]
-                    if componentHash and v.component == componentHash then
-                        local label = itemInfo and itemInfo.label or 'Unknown'
-                        Attachies[#Attachies + 1] = {
-                            attachment = attachmentType,
-                            label = label,
-                        }
-                    end
-                end
-            end
-            local DJATA = {
-                Attachments = Attachies,
-                WeaponData = WeaponData,
-                itemInfo = itemInfo,
-            }
-            cb(DJATA)
-        else
-            RemoveWeaponComponentFromPed(ped, joaat(WeaponData.name), joaat(Attachment))
-            cb({})
-        end
-    end, data.AttachmentData, WeaponData)
-end)
-
 -- Vending
 
 CreateThread(function()
@@ -388,20 +272,172 @@ end
 RegisterKeyMapping('openInv', Lang:t('inf_mapping.opn_inv'), 'keyboard', Config.Keybinds.Open)
 RegisterKeyMapping('toggleHotbar', Lang:t('inf_mapping.tog_slots'), 'keyboard', Config.Keybinds.Hotbar)
 
+
+-- =========================================================
+--             CALLBACKS DEL NUI (React -> Lua)
+-- =========================================================
+
+RegisterNUICallback('PlayDropFail', function(_, cb)
+    PlaySound(-1, 'Place_Prop_Fail', 'DLC_Dmod_Prop_Editor_Sounds', 0, 0, 1)
+    cb({})
+end)
+
+RegisterNUICallback('AttemptPurchase', function(data, cb)
+    QBCore.Functions.TriggerCallback('qb-inventory:server:attemptPurchase', function(canPurchase)
+        cb(canPurchase)
+    end, data)
+end)
+
+-- Cerrar Inventario
+RegisterNUICallback('close', function(data, cb)
+    SetNuiFocus(false, false)
+    
+    -- Si React nos envía un secondaryId (ej: 'trunk-XYZ'), lo usamos
+    if data and data.secondaryId then
+        if data.secondaryId:find('trunk-') then
+            CloseTrunk()
+        end
+        TriggerServerEvent('qb-inventory:server:closeInventory', data.secondaryId)
+        
+    -- Si no, checkeamos drops o cerramos player
+    elseif CurrentDrop then
+        TriggerServerEvent('qb-inventory:server:closeInventory', CurrentDrop)
+        CurrentDrop = nil
+    else
+        TriggerServerEvent('qb-inventory:server:closeInventory', 'player')
+    end
+    
+    cb({})
+end)
+
+-- Alias para cierre
+RegisterNUICallback('CloseInventory', function(data, cb)
+    SetNuiFocus(false, false)
+    cb({})
+end)
+
+-- Mover Items (Arrastrar y Soltar)
 RegisterNUICallback('moveItem', function(data, cb)
     local fromInventory = data.fromInv
     local toInventory = data.toInv
 
+    -- Si es player, usamos el source del jugador
     if fromInventory == 'player' then fromInventory = PlayerData.source end 
     if toInventory == 'player' then toInventory = PlayerData.source end
 
+    -- Trigger al evento original de qb-inventory
     TriggerServerEvent('qb-inventory:server:SetInventoryData', 
         fromInventory,
         toInventory,
         data.fromSlot,
         data.toSlot,
         data.fromAmount,
-        0
+        0 -- toAmount suele ignorarse en qb moderno si se envía 0
     )
+    cb({ success = true })
+end)
+
+-- Usar Item
+RegisterNUICallback('useItem', function(data, cb)
+    TriggerServerEvent('qb-inventory:server:useItem', data.item)
     cb({})
+end)
+
+-- Tirar Item (Drop) CORREGIDO
+RegisterNUICallback('DropItem', function(data, cb)
+    -- Aseguramos que sean números
+    local slot = tonumber(data.item.slot)
+    local amount = tonumber(data.amount)
+    local itemName = data.item.name
+
+    -- DEBUG: Esto aparecerá en tu consola F8 cuando intentes tirar algo.
+    -- Si dice "nil", sabemos que React no está enviando bien el dato.
+    print('[DEBUG Drop] Intentando tirar:', itemName, 'x', amount, 'del Slot:', slot)
+
+    if not slot or not amount then 
+        print('[ERROR] Slot o cantidad inválidos')
+        cb('error')
+        return
+    end
+
+    -- Trigger al evento de creación de drop
+    QBCore.Functions.TriggerCallback('qb-inventory:server:createDrop', function(dropId)
+        if dropId then
+            cb('ok')
+        else
+            -- Si el servidor devuelve false, es porque no encontró el item en ese slot
+            print('[ERROR] El servidor rechazó el drop (Item no encontrado en slot '..slot..')')
+            cb('error')
+        end
+    end, {
+        name = itemName, 
+        amount = amount, 
+        fromSlot = slot, -- QB espera 'fromSlot'
+        type = data.item.type or 'item', 
+        info = data.item.info or {}
+    })
+end)
+
+-- Dar Item (Give)
+RegisterNUICallback('GiveItem', function(data, cb)
+    local player, distance = QBCore.Functions.GetClosestPlayer()
+    if player ~= -1 and distance < 2.5 then
+        local playerId = GetPlayerServerId(player)
+        
+        -- Usamos la callback existente de QB
+        QBCore.Functions.TriggerCallback('qb-inventory:server:giveItem', function(success)
+            if success then
+                QBCore.Functions.Notify("Has dado " .. data.amount .. "x " .. data.item.label, "success")
+            else
+                QBCore.Functions.Notify("No se pudo dar el item", "error")
+            end
+            cb('ok')
+        end, playerId, data.item.name, tonumber(data.amount), data.item.slot, data.item.info)
+    else
+        QBCore.Functions.Notify("No hay nadie cerca", "error")
+        cb('ok')
+    end
+end)
+
+RegisterNUICallback('GetWeaponData', function(cData, cb)
+    local data = {
+        WeaponData = QBCore.Shared.Items[cData.weapon],
+        AttachmentData = FormatWeaponAttachments(cData.ItemData)
+    }
+    cb(data)
+end)
+
+RegisterNUICallback('RemoveAttachment', function(data, cb)
+    local ped = PlayerPedId()
+    local WeaponData = data.WeaponData
+    local allAttachments = exports['qb-weapons']:getConfigWeaponAttachments()
+    local Attachment = allAttachments[data.AttachmentData.attachment][WeaponData.name]
+    local itemInfo = QBCore.Shared.Items[data.AttachmentData.attachment]
+    QBCore.Functions.TriggerCallback('qb-weapons:server:RemoveAttachment', function(NewAttachments)
+        if NewAttachments ~= false then
+            local Attachies = {}
+            RemoveWeaponComponentFromPed(ped, joaat(WeaponData.name), joaat(Attachment))
+            for _, v in pairs(NewAttachments) do
+                for attachmentType, weapons in pairs(allAttachments) do
+                    local componentHash = weapons[WeaponData.name]
+                    if componentHash and v.component == componentHash then
+                        local label = itemInfo and itemInfo.label or 'Unknown'
+                        Attachies[#Attachies + 1] = {
+                            attachment = attachmentType,
+                            label = label,
+                        }
+                    end
+                end
+            end
+            local DJATA = {
+                Attachments = Attachies,
+                WeaponData = WeaponData,
+                itemInfo = itemInfo,
+            }
+            cb(DJATA)
+        else
+            RemoveWeaponComponentFromPed(ped, joaat(WeaponData.name), joaat(Attachment))
+            cb({})
+        end
+    end, data.AttachmentData, WeaponData)
 end)

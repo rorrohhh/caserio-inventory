@@ -1,5 +1,6 @@
 import React from 'react';
 import { useDraggable, useDroppable } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
 import type { Item } from '../types/inventory';
 import clsx from 'clsx';
 
@@ -10,28 +11,44 @@ interface SlotProps {
     type: 'player' | 'secondary';
     isSelected?: boolean;
     onClick?: () => void;
-    // NUEVO: Prop para manejar el "Usar Item"
     onRightClick?: () => void;
 }
 
 export const Slot: React.FC<SlotProps> = ({ id, index, item, type, isSelected, onClick, onRightClick }) => {
+
+    // --- ÍNDICE LÓGICO ---
+    // 'index' es 0, 1, 2 (para visuales CSS y Hotbar).
+    // 'slotNumber' es 1, 2, 3 (para la lógica de la base de datos).
+    const slotNumber = index + 1;
+
     const { setNodeRef: setDropRef, isOver } = useDroppable({
         id: id,
-        data: { index, type, item }
+        data: { index: slotNumber, type, item }
     });
 
-    const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
-        id: `drag-${id}-${index}`,
-        data: { index, type, item },
+    const { attributes, listeners, setNodeRef: setDragRef, isDragging, transform } = useDraggable({
+        id: item ? `drag-${type}-${index}` : `empty-${type}-${index}`,
+        data: { index: slotNumber, type, item },
         disabled: !item
     });
 
-    const isHotbar = type === 'player' && index <= 5;
+    // Estilo para mover el item (z-index alto para que flote sobre todo)
+    const style = transform ? {
+        transform: CSS.Translate.toString(transform),
+        zIndex: 9999,
+    } : undefined;
 
-    // Manejador para el click derecho (Usar item)
+    // Visualmente usamos el index original (0-based) para saber si es < 5
+    const isHotbar = type === 'player' && index < 5;
+
+    // --- FUNCIÓN DE CLICK DERECHO ROBUSTA ---
     const handleContextMenu = (e: React.MouseEvent) => {
-        e.preventDefault(); // Evita que salga el menú del navegador
-        if (!isDragging && item && onRightClick) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // console.log(`[Slot] Click derecho en slot ${slotNumber}`, item); // Debug opcional
+
+        if (item && onRightClick) {
             onRightClick();
         }
     };
@@ -39,68 +56,65 @@ export const Slot: React.FC<SlotProps> = ({ id, index, item, type, isSelected, o
     return (
         <div
             ref={setDropRef}
+            onContextMenu={handleContextMenu}
             onClick={!isDragging ? onClick : undefined}
-            onContextMenu={handleContextMenu} // Añadido evento nativo
-            // ESTILO CHAT: Aspecto de botón de interfaz, fondo oscuro sólido
             className={clsx(
-                "relative w-full aspect-square rounded-lg transition-all duration-150",
-                "flex items-center justify-center select-none overflow-hidden",
+                "group relative w-full aspect-square rounded-md transition-colors duration-200 ease-out",
+                "flex items-center justify-center select-none overflow-visible",
 
-                // LÓGICA DE COLORES
-                // Seleccionado: Borde claro sólido (estilo selección de color)
-                isSelected && item ? "bg-[#2a2a2a] border-2 border-zinc-400" :
-
-                    // Drag Over: Gris más claro
-                    isOver ? "bg-[#333] border-2 border-zinc-600" :
-
-                        // Normal (con item): Fondo 'card' sutil
-                        item ? "bg-[#202020] border border-white/5 hover:bg-[#2a2a2a]" :
-
-                            // Vacío: Muy oscuro, 'socket' vacío
-                            "bg-[#0f0f0f] border border-[#222] hover:border-[#333]"
+                // Estilos visuales
+                isOver && !isDragging ? "bg-white/10 border border-white/40 shadow-[inset_0_0_15px_rgba(255,255,255,0.1)]" :
+                    isSelected && item ? "bg-[#1e293b] border border-cyan-500/50 shadow-[0_0_10px_rgba(6,182,212,0.15)]" :
+                        item ? "bg-[#1a1a1a] border border-white/5 hover:border-white/20 hover:bg-[#222]" :
+                            "bg-black/20 border border-white/5 hover:bg-white/5"
             )}
         >
-            {/* Indicador Hotbar (Tag pequeño en esquina, estilo chat) */}
-            {isHotbar && !item && (
-                <div className="absolute top-1 right-1 w-1.5 h-1.5 bg-zinc-600 rounded-full"></div>
-            )}
-
-            {/* Número de Slot (Tipografía limpia) - AHORA TOTALMENTE BLANCA */}
+            {/* Número de Slot Visual (index + 1) */}
             <span className={clsx(
-                "absolute top-1.5 left-2 text-[10px] font-medium text-white",
-                // Eliminamos la distinción de color anterior para que siempre sea blanco
+                "absolute top-1 left-1.5 text-[10px] font-bold z-0 pointer-events-none",
+                isHotbar ? "text-zinc-500 group-hover:text-zinc-300" : "text-zinc-700 group-hover:text-zinc-600"
             )}>
-                {index}
+                {index + 1}
             </span>
 
-            {/* Item */}
+            {/* Barra Hotbar */}
+            {isHotbar && (
+                <div className={clsx("absolute top-0 left-0 w-full h-[2px] transition-colors", isSelected ? "bg-cyan-500" : "bg-transparent")} />
+            )}
+
+            {/* Item Draggable */}
             {item && (
                 <div
                     ref={setDragRef}
+                    style={style}
                     {...listeners}
                     {...attributes}
+                    onContextMenu={handleContextMenu}
                     className={clsx(
-                        "w-full h-full p-2.5 relative z-10 cursor-grab active:cursor-grabbing flex items-center justify-center",
+                        "w-full h-full p-2 relative z-10 cursor-grab active:cursor-grabbing flex items-center justify-center touch-none",
                         isDragging ? "opacity-0" : "opacity-100"
                     )}
                 >
                     <img
-                        src={item.image || `./img/icons/${item.name}.png`}
-                        // NUEVO: Si la imagen falla, usamos una por defecto o ocultamos el error
+                        // --- CORRECCIÓN FINAL: AGREGA EL PUNTO AL INICIO ---
+                        // De: src={`/images/...`}  ->  A: src={`./images/...`}
+                        src={item.image || `./images/${item.name.toLowerCase()}.png`}
+
                         onError={(e) => {
-                            // Opción A: Poner una imagen placeholder si tienes una
-                            // e.currentTarget.src = './img/icons/default.png'; 
-                            // Opción B: Ocultar la imagen rota (para que no se vea feo)
+                            // Si falla, bajamos opacidad pero no ocultamos para que veas si carga algo
                             e.currentTarget.style.opacity = '0.5';
+                            console.warn('Fallo ruta:', e.currentTarget.src);
                         }}
-                        className="w-full h-full object-contain filter drop-shadow-sm pointer-events-none"
+
+                        className={clsx(
+                            "w-full h-full object-contain filter drop-shadow-md pointer-events-none transition-transform duration-200 group-hover:scale-110",
+                            !isDragging && "opacity-100"
+                        )}
                         alt={item.label}
                     />
-
-                    {/* Contador cantidad (Tag estilo 'POLICIA'/'OOC' del chat) */}
                     {item.count > 1 && (
-                        <div className="absolute bottom-1 right-1 bg-[#151515] border border-white/10 text-white text-[9px] font-bold px-1.5 rounded shadow-sm">
-                            x{item.count}
+                        <div className="absolute bottom-1 right-1 px-1.5 py-0.5 bg-black/60 border border-white/10 backdrop-blur-sm rounded-sm text-[9px] font-bold text-zinc-300 pointer-events-none">
+                            {item.count}
                         </div>
                     )}
                 </div>

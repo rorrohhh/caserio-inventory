@@ -154,16 +154,32 @@ RegisterNetEvent('qb-inventory:server:closeInventory', function(inventory)
     local src = source
     local QBPlayer = QBCore.Functions.GetPlayer(src)
     if not QBPlayer then return end
+
+    -- 1. Aseguramos que inventory sea texto
+    inventory = tostring(inventory)
+
+    -- 2. Desbloqueamos el inventario
     Player(source).state.inv_busy = false
+
+    -- 3. GUARDADO DE PERSISTENCIA DEL JUGADOR (CRÍTICO)
+    QBPlayer.Functions.Save()
+
+    -- Filtros de seguridad
     if inventory:find('shop%-') then return end
+
     if inventory:find('otherplayer%-') then
         local targetId = tonumber(inventory:match('otherplayer%-(.+)'))
-        Player(targetId).state.inv_busy = false
+        if targetId then
+            Player(targetId).state.inv_busy = false
+            local Target = QBCore.Functions.GetPlayer(targetId)
+            if Target then Target.Functions.Save() end
+        end
         return
     end
+
     if Drops[inventory] then
         Drops[inventory].isOpen = false
-        if #Drops[inventory].items == 0 and not Drops[inventory].isOpen then -- if no listeed items in the drop on close
+        if #Drops[inventory].items == 0 and not Drops[inventory].isOpen then 
             TriggerClientEvent('qb-inventory:client:removeDropTarget', -1, Drops[inventory].entityId)
             Wait(500)
             local entity = NetworkGetEntityFromNetworkId(Drops[inventory].entityId)
@@ -172,9 +188,27 @@ RegisterNetEvent('qb-inventory:server:closeInventory', function(inventory)
         end
         return
     end
+
+    -- 4. GUARDADO EN TABLAS ESPECÍFICAS (TU CORRECCIÓN)
     if not Inventories[inventory] then return end
+    
     Inventories[inventory].isOpen = false
-    MySQL.prepare('INSERT INTO inventories (identifier, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = ?', { inventory, json.encode(Inventories[inventory].items), json.encode(Inventories[inventory].items) })
+    local itemsJson = json.encode(Inventories[inventory].items or {})
+
+    if inventory:find("trunk") then
+        -- Es un maletero: Guardar en 'trunkitems' usando la patente (plate)
+        local plate = inventory:gsub("trunk%-", "")
+        MySQL.prepare('INSERT INTO trunkitems (plate, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = ?', { plate, itemsJson, itemsJson })
+        
+    elseif inventory:find("glovebox") then
+        -- Es una guantera: Guardar en 'gloveboxitems' usando la patente (plate)
+        local plate = inventory:gsub("glovebox%-", "")
+        MySQL.prepare('INSERT INTO gloveboxitems (plate, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = ?', { plate, itemsJson, itemsJson })
+        
+    else
+        -- Es un stash normal: Guardar en 'inventories'
+        MySQL.prepare('INSERT INTO inventories (identifier, items) VALUES (?, ?) ON DUPLICATE KEY UPDATE items = ?', { inventory, itemsJson, itemsJson })
+    end
 end)
 
 RegisterNetEvent('qb-inventory:server:useItem', function(item)

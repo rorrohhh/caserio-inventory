@@ -2,19 +2,22 @@ import { create } from 'zustand';
 import type { InventoryState, Item } from '../types/inventory';
 import { fetchNui } from '../utils/fetchNui';
 
-// Helper para convertir el formato de QBCore (Objeto) a Array para React
 const formatItems = (itemsObj: any): Item[] => {
     if (!itemsObj) return [];
-    if (Array.isArray(itemsObj)) return itemsObj; // Ya es array (formato nuevo)
 
-    // Si es objeto {1: {name:x}, 2: {name:y}}, lo convertimos a array preservando slots
-    return Object.values(itemsObj).map((item: any) => ({
-        ...item,
-        // Aseguramos que count exista (a veces viene como amount)
-        count: item.amount || item.count || 1,
-        // Aseguramos etiqueta
-        label: item.label || item.name
-    }));
+    const itemsArray = Array.isArray(itemsObj) ? itemsObj : Object.values(itemsObj);
+
+    return itemsArray.map((item: any) => {
+        const rawName = item.name || item.item || 'unknown';
+
+        return {
+            ...item,
+            name: rawName.toLowerCase(),
+            count: item.amount || item.count || 1,
+            label: item.label || rawName,
+            slot: Number(item.slot)
+        };
+    });
 };
 
 export const useInventory = create<InventoryState>((set, get) => ({
@@ -23,47 +26,56 @@ export const useInventory = create<InventoryState>((set, get) => ({
     secondaryItems: [],
     maxWeight: 0,
     currentWeight: 0,
+    hasSecondary: false,
+    secondaryLabel: '',
+    secondaryId: null,
+    activeItem: null,
+
+    setActiveItem: (item) => set({ activeItem: item }),
 
     setInventoryData: (data) => {
-        console.log('[React] Recibiendo datos de Lua:', data);
+        console.log('[React] Datos:', JSON.stringify(data, null, 2));
 
-        // Detectar si viene del formato standard qb-inventory o del nuestro
-        // qb-inventory usa 'inventory' y 'other', nosotros usamos 'playerItems'
         const playerItems = data.playerItems || formatItems(data.inventory);
-        const secondaryItems = data.secondaryItems || formatItems(data.other);
+        const hasSecondary = !!data.other;
+
+        const secondaryId = hasSecondary ? (data.other.name || 'secondary') : null;
+
+        const secondaryItems = hasSecondary ? (data.secondaryItems || formatItems(data.other.inventory || data.other)) : [];
+        const secondaryLabel = hasSecondary ? (data.other.label || 'External') : '';
 
         set({
             isOpen: true,
             playerItems: playerItems,
             secondaryItems: secondaryItems,
             currentWeight: data.weight || 0,
-            maxWeight: data.maxWeight || 120000
+            maxWeight: data.maxWeight || 120000,
+            hasSecondary: hasSecondary,
+            secondaryLabel: secondaryLabel,
+            secondaryId: secondaryId
         });
     },
 
     closeInventory: () => {
-        fetchNui('close', {}, {});
-        set({ isOpen: false });
+        const { secondaryId } = get();
+        fetchNui('CloseInventory', { name: secondaryId || 'player' }, {});
+        set({ isOpen: false, activeItem: null, secondaryId: null });
     },
 
     hideInventory: () => {
-        set({ isOpen: false });
+        set({ isOpen: false, activeItem: null });
     },
 
     moveItem: (fromInv, fromSlot, toInv, toSlot) => {
         const state = get();
-        // 1. Snapshot para Rollback
         const previousPlayerItems = [...state.playerItems];
         const previousSecondaryItems = [...state.secondaryItems];
 
-        // Helpers
         const getItems = (inv: 'player' | 'secondary') =>
             inv === 'player' ? [...state.playerItems] : [...state.secondaryItems];
 
         const sourceItems = getItems(fromInv);
         const targetItems = fromInv === toInv ? sourceItems : getItems(toInv);
-
-        // Indices
         const sourceItemIndex = sourceItems.findIndex(i => i.slot === fromSlot);
         const targetItemIndex = targetItems.findIndex(i => i.slot === toSlot);
 
@@ -72,13 +84,11 @@ export const useInventory = create<InventoryState>((set, get) => ({
         const sourceItem = { ...sourceItems[sourceItemIndex] };
         const targetItem = targetItemIndex !== -1 ? { ...targetItems[targetItemIndex] } : undefined;
 
-        // --- LÓGICA OPTIMISTA ---
         sourceItem.slot = toSlot;
 
         if (targetItem) {
             targetItem.slot = fromSlot;
             sourceItems[sourceItemIndex] = targetItem;
-
             if (fromInv === toInv) {
                 sourceItems[targetItemIndex] = sourceItem;
             } else {
@@ -98,18 +108,42 @@ export const useInventory = create<InventoryState>((set, get) => ({
             secondaryItems: fromInv === 'secondary' ? sourceItems : (toInv === 'secondary' ? targetItems : state.secondaryItems)
         });
 
-        // NOTA IMPORTANTE:
-        // Si usas el backend original de QB, es posible que el evento no se llame 'moveItem'.
-        // Podría llamarse 'CombineItem', 'SwitchItem' o necesitar que agregues el evento
-        // 'moveItem' en el lua original (client/main.lua).
-        // Por ahora mantenemos 'moveItem' asumiendo que agregarás ese pequeño evento al Lua oficial.
-        fetchNui<{ success: boolean }>('moveItem', {
-            fromInv, fromSlot, toInv, toSlot,
-            // Datos extra que a veces pide QB original
+        const realFromInv = fromInv === 'player' ? 'player' : state.secondaryId;
+        const realToInv = toInv === 'player' ? 'player' : state.secondaryId;
+
+        fetchNui('SetInventoryData', {
+            fromInventory: realFromInv,
+            toInventory: realToInv,
+            fromSlot,
+            toSlot,
             fromAmount: sourceItem.count,
+            toAmount: 0
         }, { success: true }).catch(() => {
-            console.error("Rollback: Error de comunicación");
+            console.error("Rollback");
             set({ playerItems: previousPlayerItems, secondaryItems: previousSecondaryItems });
         });
+    },
+
+    deleteItemLocal: (inventory, slot, amount) => {
+        const state = get();
+        const isPlayer = inventory === 'player';
+        const items = isPlayer ? [...state.playerItems] : [...state.secondaryItems];
+
+        const itemIndex = items.findIndex(i => i.slot === slot);
+        if (itemIndex === -1) return;
+
+        const item = items[itemIndex];
+
+        if (amount >= item.count) {
+            items.splice(itemIndex, 1);
+        } else {
+            items[itemIndex] = { ...item, count: item.count - amount };
+        }
+
+        if (isPlayer) {
+            set({ playerItems: items });
+        } else {
+            set({ secondaryItems: items });
+        }
     }
 }));

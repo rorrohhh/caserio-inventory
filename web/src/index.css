@@ -7,3 +7,26 @@ body {
   background-color: transparent;
   overflow: hidden;
 }
+
+/* --- ESTILOS PERSONALIZADOS DEL SCROLLBAR --- */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  /* Grosor delgado */
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: #0f0f0f;
+  /* Fondo del carril (casi negro) */
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #333;
+  /* La barra en sí (gris oscuro) */
+  border-radius: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #555;
+  /* Un poco más claro al pasar el mouse */
+}
